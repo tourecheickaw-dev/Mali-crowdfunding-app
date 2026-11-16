@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@theme {
+--color-brand-50: #f0faf4;
+--color-brand-100: #d9f1e3;
+--color-brand-200: #b3e2c8;
+--color-brand-300: #80cba5;
+--color-brand-400: #43ad7c;
+--color-brand-500: #1a925c;
+--color-brand-600: #0e7c4a;
+--color-brand-700: #0a5c37;
+--color-brand-800: #084a2d;
+--color-brand-900: #0b2e1f;
+--color-gold-100: #fdf1cc;
+--color-gold-400: #f5b82e;
+--color-gold-500: #e5a512;
+--font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  h1 { margin-bottom: 1rem; }
+  h2 { margin-bottom: 1.25rem; }
+  h3 { margin-bottom: 0.5rem; }
+}
+
+body { font-family: system-ui, sans-serif; background: #fafaf7; color: #1f2937; }
+
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    border-radius: 9999px;
+    padding: 0.9rem 2rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    transition: all 0.2s;
+  }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  
+ .btn-primary{background:#0e7c4a;color:#fff;box-shadow:0 10px 20px -10px rgba(14,124,74,.55)}
+.btn-primary:hover:not(:disabled){background:#0a5c37;transform:translateY(-2px)}
+.btn-outline{border:2px solid #111827;color:#111827;background:#fff}
+.btn-outline:hover:not(:disabled){background:#111827;color:#fff}
+}
