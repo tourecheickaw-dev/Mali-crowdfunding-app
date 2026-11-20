@@ -92,7 +92,7 @@ func (s *DonationService) CreateDonation(ctx context.Context, input CreateDonati
 		donorPhoto = ""
 	}
 
-	fee := CalculateFee(input.Amount)
+	fee := ComputeFee(input.Amount)
 	now := time.Now()
 	donation := models.Donation{
 		ID:              uuid.New().String(),

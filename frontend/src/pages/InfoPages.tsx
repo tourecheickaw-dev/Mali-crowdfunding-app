@@ -2,7 +2,7 @@ import { useEffect, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 // À MODIFIER : ton vrai e-mail de contact (et ton numéro WhatsApp si tu veux en mettre un).
-const CONTACT_EMAIL = 'contact@exemple.com'
+const CONTACT_EMAIL = 'demso.support@gmail.com'
 const UPDATED = '3 novembre 2026'
 
 function Shell({ title, intro, children }: { title: string; intro?: string; children: ReactNode }) {

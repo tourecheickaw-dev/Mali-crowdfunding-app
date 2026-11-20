@@ -57,7 +57,7 @@ func (h *DonationHandler) Create(c *gin.Context) {
 		return
 	}
 	// The limit applies to what the donor actually pays: donation + fee + tip.
-	totalToPay := req.Amount + service.CalculateFee(req.Amount) + req.TipAmount
+	totalToPay := req.Amount + service.ComputeFee(req.Amount) + req.TipAmount
 	if limit > 0 && totalToPay > limit {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "amount exceeds the limit for this payment method (fee included)"})
 		return

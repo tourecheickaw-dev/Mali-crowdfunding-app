@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, fcfa } from '../api'
-import { PAY_METHODS, calcFee } from '../constants'
+import { PAY_METHODS } from '../constants'
+import DonationSummary, { computeFee } from '../components/DonationSummary'
 import type { CampaignDetail, DonationCreated } from '../types'
 
 const QUICK = [2000, 5000, 10000, 25000]
 const PHONE_RE = /^\+\d{8,15}$/
 
 export default function DonatePage() {
-
   const { slug } = useParams<{ slug: string }>()
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null)
   const [amount, setAmount] = useState('')
@@ -23,11 +23,13 @@ export default function DonatePage() {
   const [result, setResult] = useState<DonationCreated | null>(null)
 
   useEffect(() => {
-    api<CampaignDetail>(`/campaigns/${slug}`).then(setCampaign).catch((e: Error) => setError(e.message))
+    api<CampaignDetail>(`/campaigns/${slug}`)
+      .then(setCampaign)
+      .catch((e: Error) => setError(e.message))
   }, [slug])
 
   const amountNum = parseInt(amount.replace(/\D/g, ''), 10) || 0
-  const fee = calcFee(amountNum)
+  const fee = computeFee(amountNum)
   const total = amountNum + fee
   const selected = PAY_METHODS.find((m) => m.value === method)
   const overLimit = !!selected && selected.max > 0 && total > selected.max
@@ -71,15 +73,18 @@ export default function DonatePage() {
 
   if (result) {
     return (
-      <div className="mx-auto max-w-lg py-12 text-brand-600enter">
-        <p className="text-brand-600rand-900xl font-bold text-[#111827]">Don enregistré</p>
+      <div className="mx-auto max-w-lg py-12 text-center">
+        <p className="text-3xl font-extrabold text-gray-900">Don enregistré</p>
         <p className="mt-3 text-gray-600">
           Total à payer : <span className="font-bold">{fcfa(result.total_charged)}</span>
         </p>
-        <p className="mt-4 rounded-2xl bg-brand-600mber-50 p-4 text-sm text-brand-600rand-900mber-800">
+        <p className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm text-amber-800">
           Le paiement en ligne n'est pas encore activé. Ce don est en attente.
         </p>
-        <Link to={`/c/${campaign.url_slug}`} className="mt-6 inline-block rounded-full bg-[#111827] px-8 py-4 text-lg font-semibold text-white">
+        <Link
+          to={`/c/${campaign.url_slug}`}
+          className="mt-6 inline-block rounded-full bg-gray-900 px-8 py-4 text-lg font-semibold text-white"
+        >
           Retour à la cagnotte
         </Link>
       </div>
@@ -90,7 +95,7 @@ export default function DonatePage() {
     <form onSubmit={submit} className="mx-auto max-w-lg space-y-6 py-8">
       <div>
         <p className="text-sm text-gray-500">Je soutiens</p>
-        <h1 className="text-brand-600rand-900xl font-bold text-[#111827]">{campaign.title}</h1>
+        <h1 className="text-3xl font-extrabold text-gray-900">{campaign.title}</h1>
       </div>
 
       <section>
@@ -101,7 +106,11 @@ export default function DonatePage() {
               type="button"
               key={q}
               onClick={() => setAmount(String(q))}
-              className={`rounded-2xl border-2 py-3 font-semibold ${amountNum === q ? 'border-brand-600 bg-brand-600rand-50 text-brand-600rand-900rand-700' : 'border-gray-200 bg-white'}`}
+              className={`rounded-2xl border-2 py-3 font-semibold ${
+                amountNum === q
+                  ? 'border-brand-600 bg-brand-50 text-brand-700'
+                  : 'border-gray-200 bg-white'
+              }`}
             >
               {new Intl.NumberFormat('fr-FR').format(q)}
             </button>
@@ -127,9 +136,16 @@ export default function DonatePage() {
               type="button"
               key={m.value}
               onClick={() => setMethod(m.value)}
-              className={`flex h-20 flex-col items-center justify-center gap-1 rounded-2xl border-2 bg-white ${method === m.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'}`}
+              className={`flex h-20 flex-col items-center justify-center gap-1 rounded-2xl border-2 bg-white ${
+                method === m.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'
+              }`}
             >
-              <img src={m.logo} alt="" className="h-8 w-auto object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
+              <img
+                src={m.logo}
+                alt=""
+                className="h-8 w-auto object-contain"
+                onError={(e) => (e.currentTarget.style.display = 'none')}
+              />
               <span className="text-sm font-medium">{m.label}</span>
             </button>
           ))}
@@ -142,26 +158,57 @@ export default function DonatePage() {
       </section>
 
       <section className="space-y-3">
-        <p className="text-lg font-semibold">Tes informations <span className="text-sm font-normal text-gray-500">(facultatif)</span></p>
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={100} placeholder="Ton prénom" className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500" />
-        <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Téléphone, ex. +223 70 00 00 00" className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500" />
-        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Email" className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500" />
-        <textarea value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} rows={3} placeholder="Un message d'encouragement (visible sur la cagnotte)" className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500" />
-        <label className="flex items-center gap-3 text-brand-600rand-900ase">
-          <input type="checkbox" checked={anonymous} onChange={(e) => setAnonymous(e.target.checked)} className="h-5 w-5" />
+        <p className="text-lg font-semibold">
+          Tes informations <span className="text-sm font-normal text-gray-500">(facultatif)</span>
+        </p>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={100}
+          placeholder="Ton prénom"
+          className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500"
+        />
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          inputMode="tel"
+          placeholder="Téléphone, ex. +223 70 00 00 00"
+          className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500"
+        />
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          type="email"
+          placeholder="Email"
+          className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500"
+        />
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          maxLength={500}
+          rows={3}
+          placeholder="Un message d'encouragement (visible sur la cagnotte)"
+          className="w-full rounded-2xl border border-gray-300 bg-white p-4 text-lg outline-none focus:border-brand-500"
+        />
+        <label className="flex items-center gap-3 text-base text-gray-900">
+          <input
+            type="checkbox"
+            checked={anonymous}
+            onChange={(e) => setAnonymous(e.target.checked)}
+            className="h-5 w-5"
+          />
           Faire ce don en anonyme
         </label>
       </section>
 
-      <section className="rounded-2xl bg-gray-50 p-4">
-        <div className="flex justify-between text-gray-600"><span>Ton don</span><span>{fcfa(amountNum)}</span></div>
-        <div className="mt-1 flex justify-between text-sm text-gray-500"><span>Frais Demso</span><span>{fcfa(fee)}</span></div>
-        <div className="mt-2 flex justify-between border-t border-gray-200 pt-2 text-lg font-bold"><span>Total</span><span>{fcfa(total)}</span></div>
-      </section>
+      <DonationSummary amount={amountNum} />
 
       {error && <p className="text-red-600">{error}</p>}
 
-      <button disabled={busy} className="w-full rounded-full bg-brand-600rand-500 py-4 text-xl font-semibold text-[#111827] disabled:opacity-60">
+      <button
+        disabled={busy}
+        className="w-full rounded-full bg-brand-600 py-4 text-xl font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+      >
         {busy ? 'Envoi…' : 'Continuer'}
       </button>
     </form>
