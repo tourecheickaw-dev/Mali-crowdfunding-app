@@ -29,6 +29,17 @@ const HINTS = [
   "Dernière étape : tout l'argent des dons arrivera directement ici.",
 ]
 
+// Messages en français quand l'ajout de la banque est refusé par le serveur
+function bankErrorMessage(msg: string): string {
+  if (msg.includes('verified mobile money')) {
+    return "Ton compte mobile money doit d'abord être vérifié. Tu pourras ajouter ta banque ensuite, depuis « Mes comptes de paiement »."
+  }
+  if (msg.includes('must match')) {
+    return 'Le nom du compte bancaire doit être le même que celui de ton compte mobile money. Tu pourras réessayer depuis « Mes comptes de paiement ».'
+  }
+  return "Le compte bancaire n'a pas pu être ajouté. Tu pourras réessayer depuis « Mes comptes de paiement »."
+}
+
 export default function CreateCampaignPage() {
   const nav = useNavigate()
   const [step, setStep] = useState(0)
@@ -42,13 +53,13 @@ export default function CreateCampaignPage() {
   const [description, setDescription] = useState('')
   const [photo, setPhoto] = useState<PickedPhoto | null>(null)
 
-  // main payout account
+  // main payout account (mobile money only)
   const [payType, setPayType] = useState('')
   const [payName, setPayName] = useState('')
-  const [payBankName, setPayBankName] = useState('')
   const [payNumber, setPayNumber] = useState('')
+  const [bankTapped, setBankTapped] = useState(false)
 
-  // optional backup bank account (only when the main one is mobile money)
+  // optional bank account, added after the mobile money account
   const [addBank, setAddBank] = useState(false)
   const [extraBankName, setExtraBankName] = useState('')
   const [extraHolder, setExtraHolder] = useState('')
@@ -58,7 +69,7 @@ export default function CreateCampaignPage() {
   const [bankCreated, setBankCreated] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [photoFailedSlug, setPhotoFailedSlug] = useState('')
+  const [done, setDone] = useState<{ slug: string; notes: string[] } | null>(null)
 
   const goalNum = parseInt(goal.replace(/\D/g, ''), 10) || 0
   const bankRecommended = goalNum >= 1_000_000 || goalNum === 0
@@ -76,9 +87,19 @@ export default function CreateCampaignPage() {
   }, [])
 
   const total = hasPayout ? 3 : 4
-  const isBank = payType === 'bank'
   const cleanNumber = payNumber.replace(/[\s.-]/g, '')
   const cleanExtra = extraNumber.replace(/\s/g, '')
+
+  function pickPayType(value: string) {
+    if (value === 'bank') {
+      // La banque vient toujours après un mobile money
+      if (payType) setAddBank(true)
+      else setBankTapped(true)
+      return
+    }
+    setBankTapped(false)
+    setPayType(value)
+  }
 
   function validate(s: number): string {
     if (s === 0 && benType !== 'self' && !benName.trim()) return 'Écris le nom de la personne ou de la cause.'
@@ -88,16 +109,11 @@ export default function CreateCampaignPage() {
     if (s === 3) {
       if (!payType) return "Choisis où recevoir l'argent."
       if (!payName.trim()) return 'Écris le nom du titulaire du compte.'
-      if (isBank) {
-        if (!payBankName.trim()) return 'Écris le nom de la banque.'
-        if (cleanNumber.length < 8) return 'Numéro de compte trop court.'
-      } else {
-        if (!PHONE_RE.test(cleanNumber)) return 'Numéro au format international, par exemple +223 70 00 00 00.'
-        if (addBank) {
-          if (!extraBankName.trim()) return 'Écris le nom de la banque.'
-          if (!extraHolder.trim()) return 'Écris le nom du titulaire du compte bancaire.'
-          if (cleanExtra.length < 8) return 'Numéro du compte bancaire trop court.'
-        }
+      if (!PHONE_RE.test(cleanNumber)) return 'Numéro au format international, par exemple +223 70 00 00 00.'
+      if (addBank) {
+        if (!extraBankName.trim()) return 'Écris le nom de la banque.'
+        if (!extraHolder.trim()) return 'Écris le nom du titulaire du compte bancaire.'
+        if (cleanExtra.length < 8) return 'Numéro du compte bancaire trop court.'
       }
     }
     return ''
@@ -122,7 +138,7 @@ export default function CreateCampaignPage() {
             type: payType,
             account_name: payName.trim(),
             account_number: cleanNumber,
-            bank_name: isBank ? payBankName.trim() : '',
+            bank_name: '',
             country,
           }),
         })
@@ -134,21 +150,6 @@ export default function CreateCampaignPage() {
             // the account may already be active; the campaign call will tell us if not
           }
         }
-      }
-
-      if (!hasPayout && addBank && !isBank && !bankCreated) {
-        // backup account: created but NOT activated, donations keep going to the main account
-        await api('/me/payout-accounts', {
-          method: 'POST',
-          body: JSON.stringify({
-            type: 'bank',
-            account_name: extraHolder.trim(),
-            account_number: cleanExtra,
-            bank_name: extraBankName.trim(),
-            country,
-          }),
-        })
-        setBankCreated(true)
       }
 
       const c = await api<Campaign>('/me/campaigns', {
@@ -163,13 +164,39 @@ export default function CreateCampaignPage() {
         }),
       })
 
+      const notes: string[] = []
+
       if (photo) {
         try {
           await attachCover(c.id, photo.url, photo.sensitive)
         } catch {
-          setPhotoFailedSlug(c.url_slug)
-          return
+          notes.push("La photo n'a pas pu être ajoutée. Tu pourras réessayer plus tard.")
         }
+      }
+
+      // Bank account: created after the campaign, never blocks it.
+      // It is NOT activated: donations keep going to the main account.
+      if (!hasPayout && addBank && !bankCreated) {
+        try {
+          await api('/me/payout-accounts', {
+            method: 'POST',
+            body: JSON.stringify({
+              type: 'bank',
+              account_name: extraHolder.trim(),
+              account_number: cleanExtra,
+              bank_name: extraBankName.trim(),
+              country,
+            }),
+          })
+          setBankCreated(true)
+        } catch (e) {
+          notes.push(bankErrorMessage(e instanceof Error ? e.message : ''))
+        }
+      }
+
+      if (notes.length > 0) {
+        setDone({ slug: c.url_slug, notes })
+        return
       }
       nav(`/c/${c.url_slug}`)
     } catch (err) {
@@ -179,13 +206,17 @@ export default function CreateCampaignPage() {
     }
   }
 
-  if (photoFailedSlug) {
+  if (done) {
     return (
       <div className="mx-auto max-w-lg py-12 text-center">
         <p className="text-5xl">🎉</p>
         <p className="mt-4 text-xl font-bold text-gray-900">Ta cagnotte est créée</p>
-        <p className="mt-2 text-gray-600">Mais la photo n'a pas pu être ajoutée. Tu pourras réessayer plus tard.</p>
-        <Link to={`/c/${photoFailedSlug}`} className="btn btn-primary mt-6">
+        {done.notes.map((n) => (
+          <p key={n} className="mt-2 text-gray-600">
+            {n}
+          </p>
+        ))}
+        <Link to={`/c/${done.slug}`} className="btn btn-primary mt-6">
           Voir ma cagnotte
         </Link>
       </div>
@@ -328,31 +359,60 @@ export default function CreateCampaignPage() {
         {step === 3 && (
           <>
             <div className="grid grid-cols-2 gap-3">
-              {PAYOUT_TYPES.map((p) => (
-                <button
-                  type="button"
-                  key={p.value}
-                  onClick={() => setPayType(p.value)}
-                  className={`flex h-24 flex-col items-center justify-center gap-2 rounded-2xl border-2 bg-white ${
-                    payType === p.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'
-                  }`}
-                >
-                  {p.value === 'bank' || !p.logo ? (
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5B82E] text-gray-900">
-                      <Landmark size={22} />
-                    </span>
-                  ) : (
-                    <img
-                      src={p.logo}
-                      alt=""
-                      className="h-10 w-auto object-contain"
-                      onError={(e) => (e.currentTarget.style.display = 'none')}
-                    />
-                  )}
-                  <span className="text-sm font-medium text-gray-900">{p.label}</span>
-                </button>
-              ))}
+              {PAYOUT_TYPES.map((p) => {
+                if (p.value === 'bank') {
+                  return (
+                    <button
+                      type="button"
+                      key={p.value}
+                      onClick={() => pickPayType('bank')}
+                      className={`relative flex h-24 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed bg-gray-50 text-gray-600 ${
+                        addBank ? 'border-brand-600' : 'border-gray-300'
+                      }`}
+                    >
+                      <span className="absolute -top-2.5 right-3 rounded-full bg-[#F5B82E] px-2.5 py-0.5 text-[11px] font-extrabold text-gray-900">
+                        En plus du mobile money
+                      </span>
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5B82E] text-gray-900">
+                        <Landmark size={22} />
+                      </span>
+                      <span className="text-sm font-medium">{p.label}</span>
+                    </button>
+                  )
+                }
+                return (
+                  <button
+                    type="button"
+                    key={p.value}
+                    onClick={() => pickPayType(p.value)}
+                    className={`flex h-24 flex-col items-center justify-center gap-2 rounded-2xl border-2 bg-white ${
+                      payType === p.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'
+                    }`}
+                  >
+                    {p.logo ? (
+                      <img
+                        src={p.logo}
+                        alt=""
+                        className="h-10 w-auto object-contain"
+                        onError={(e) => (e.currentTarget.style.display = 'none')}
+                      />
+                    ) : (
+                      <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#F5B82E] text-gray-900">
+                        <Landmark size={22} />
+                      </span>
+                    )}
+                    <span className="text-sm font-medium text-gray-900">{p.label}</span>
+                  </button>
+                )
+              })}
             </div>
+
+            {bankTapped && !payType && (
+              <p className="rounded-2xl border border-[#F5B82E] bg-[#fdf1cc] p-4 text-sm text-gray-900">
+                <b>Choisis d'abord Wave ou Orange Money</b> pour recevoir tes dons. Ensuite, tu pourras ajouter ta
+                banque : c'est utile pour les grosses sommes.
+              </p>
+            )}
 
             {payType && (
               <>
@@ -363,109 +423,92 @@ export default function CreateCampaignPage() {
                   placeholder="Nom du titulaire (comme sur le compte)"
                   className={input}
                 />
-                {isBank && (
-                  <input
-                    value={payBankName}
-                    onChange={(e) => setPayBankName(e.target.value)}
-                    maxLength={100}
-                    placeholder="Nom de la banque"
-                    className={input}
-                  />
-                )}
                 <input
                   value={payNumber}
                   onChange={(e) => setPayNumber(e.target.value)}
-                  inputMode={isBank ? 'text' : 'tel'}
-                  placeholder={isBank ? 'Numéro de compte (IBAN ou RIB)' : 'Numéro, ex. +223 70 00 00 00'}
+                  inputMode="tel"
+                  placeholder="Numéro, ex. +223 70 00 00 00"
                   className={input}
                 />
-                              <p className="rounded-2xl bg-gray-50 p-3 text-sm text-gray-700">
-                  {isBank
-                    ? 'Ce compte sera vérifié avant d’être activé. Tu pourras le changer plus tard, avec une vérification de sécurité.'
-                    : 'Les dons arrivent directement sur ce compte. Nous ne gardons que nos frais. Tu pourras le changer plus tard, avec une vérification de sécurité.'}
+                <p className="rounded-2xl bg-gray-50 p-3 text-sm text-gray-700">
+                  Les dons arrivent directement sur ce compte. Nous ne gardons que nos frais. Tu pourras le changer
+                  plus tard, avec une vérification de sécurité.
                 </p>
-              </>
-            )}
 
-            {/* Optional backup bank account */}
-            {payType && !isBank && (
-              <div
-                className={`mt-4 rounded-3xl border-2 p-5 transition ${
-                  addBank ? 'border-brand-600 bg-brand-50' : 'border-gray-200 bg-white'
-                }`}
-              >
-                <div className="flex items-start gap-4">
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#F5B82E] text-gray-900">
-                    <Landmark size={24} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-lg font-extrabold text-gray-900">Ajouter un compte bancaire</p>
+                {/* Bank account, after the mobile money account */}
+                <div className="rounded-3xl border-2 border-[#F5B82E] bg-[#fdf1cc] p-5">
+                  <div className="flex items-start gap-4">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#F5B82E] text-gray-900">
+                      <Landmark size={24} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-lg font-extrabold text-gray-900">Tu as aussi un compte bancaire ?</p>
+                      <p className="mt-1 text-sm text-gray-700">
+                        Ajoute-le : tu pourras recevoir de plus grosses sommes, au-delà des limites du mobile money.
+                      </p>
                       {bankRecommended && (
-                        <span className="rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-white">
-                          Recommandé
+                        <span className="mt-2 inline-block rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-white">
+                          Recommandé pour ta cagnotte
                         </span>
                       )}
                     </div>
-                    <p className="mt-1 text-sm text-gray-600">
-                      Facultatif. Les comptes mobile money ont des plafonds : si le tien est plein, tu pourras passer
-                      sur ta banque.
-                    </p>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={addBank}
-                    aria-label="Ajouter un compte bancaire"
-                    onClick={() => setAddBank(!addBank)}
-                    className="relative h-7 w-12 shrink-0 rounded-full transition"
-                    style={{ backgroundColor: addBank ? '#0e7c4a' : '#d1d5db' }}
-                  >
-                    <span
-                      className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${
-                        addBank ? 'left-6' : 'left-1'
-                      }`}
-                    />
-                  </button>
-                </div>
 
-                {addBank && (
-                  <div className="mt-5 space-y-4">
-                    <div>
-                      <label className="mb-1 block text-sm font-semibold text-gray-900">Nom de la banque</label>
-                      <input
-                        value={extraBankName}
-                        onChange={(e) => setExtraBankName(e.target.value)}
-                        maxLength={100}
-                        placeholder="Ex : Coris Bank, BDM, UBA"
-                        className={smallInput}
-                      />
+                                   <button
+                    type="button"
+                    onClick={() => setAddBank(!addBank)}
+                    aria-pressed={addBank}
+                    className={`mt-4 w-full rounded-full border-2 py-3 font-bold transition active:scale-[0.98] ${
+                      addBank
+                        ? 'border-brand-600 bg-brand-600 text-white hover:bg-brand-700'
+                        : 'border-gray-900 bg-white text-gray-900 hover:bg-gray-100'
+                    }`}
+                  >
+                    {addBank ? '✓ Je veux ajouter ma banque' : 'Ajouter ma banque'}
+                  </button>
+
+                  {addBank && (
+                    <div className="mt-5 space-y-4">
+                      <p className="text-sm text-gray-700">
+                        Écris le nom exactement comme sur le document de ta banque. Il doit correspondre à celui de ton
+                        compte mobile money.
+                      </p>
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-gray-900">Nom de la banque</label>
+                        <input
+                          value={extraBankName}
+                          onChange={(e) => setExtraBankName(e.target.value)}
+                          maxLength={100}
+                          placeholder="Ex : Coris Bank, BDM, UBA"
+                          className={smallInput}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-gray-900">Nom du titulaire</label>
+                        <input
+                          value={extraHolder}
+                          onChange={(e) => setExtraHolder(e.target.value)}
+                          maxLength={100}
+                          placeholder="Nom complet, comme sur le compte"
+                          className={smallInput}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-sm font-semibold text-gray-900">
+                          Numéro de compte (IBAN ou RIB)
+                        </label>
+                        <input
+                          value={extraNumber}
+                          onChange={(e) => setExtraNumber(e.target.value)}
+                          maxLength={40}
+                          placeholder="Ex : ML00 0000 0000 0000 0000"
+                          className={smallInput}
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-semibold text-gray-900">Nom du titulaire</label>
-                      <input
-                        value={extraHolder}
-                        onChange={(e) => setExtraHolder(e.target.value)}
-                        maxLength={100}
-                        placeholder="Nom complet, comme sur le compte"
-                        className={smallInput}
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm font-semibold text-gray-900">
-                        Numéro de compte (IBAN ou RIB)
-                      </label>
-                      <input
-                        value={extraNumber}
-                        onChange={(e) => setExtraNumber(e.target.value)}
-                        maxLength={40}
-                        placeholder="Ex : ML00 0000 0000 0000 0000"
-                        className={smallInput}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              </>
             )}
           </>
         )}

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/tourecheickaw-dev/Mali-crowdfunding-app/internal/models"
@@ -29,6 +32,82 @@ type AddPayoutAccountInput struct {
 	BankName      string // Required for a bank account
 	BankCode      string // Optional
 	Country       string // Required for a bank account (ISO code, e.g. "ML"); derived from phone for mobile money
+}
+
+// accentReplacer removes French accents so "Touré" and "TOURE" are compared as equal.
+var accentReplacer = strings.NewReplacer(
+	"à", "a", "â", "a", "ä", "a", "á", "a", "ã", "a",
+	"é", "e", "è", "e", "ê", "e", "ë", "e",
+	"î", "i", "ï", "i", "í", "i",
+	"ô", "o", "ö", "o", "ó", "o", "õ", "o",
+	"ù", "u", "û", "u", "ü", "u", "ú", "u",
+	"ç", "c", "ñ", "n", "œ", "oe", "æ", "ae",
+)
+
+// nameTokens splits a name into lowercase words without accents or punctuation.
+func nameTokens(name string) []string {
+	s := accentReplacer.Replace(strings.ToLower(name))
+	return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) })
+}
+
+// namesMatch compares two names ignoring case, accents, punctuation and word order.
+// Every word of the shorter name must appear in the longer one
+// (so a missing middle name is fine). A one-word name is only accepted
+// if both names are exactly that word.
+func namesMatch(a, b string) bool {
+	ta, tb := nameTokens(a), nameTokens(b)
+	if len(ta) == 0 || len(tb) == 0 {
+		return false
+	}
+	if len(ta) > len(tb) {
+		ta, tb = tb, ta // ta is now the shorter one
+	}
+	set := make(map[string]bool, len(tb))
+	for _, t := range tb {
+		set[t] = true
+	}
+	for _, t := range ta {
+		if !set[t] {
+			return false
+		}
+	}
+	if len(ta) < 2 && len(tb) != len(ta) {
+		return false
+	}
+	return true
+}
+
+func isMobileMoney(t models.PayoutType) bool {
+	switch t {
+	case models.PayoutOrangeMoney, models.PayoutWave, models.PayoutMoov,
+		models.PayoutMTN, models.PayoutFreeMoney, models.PayoutWizall:
+		return true
+	}
+	return false
+}
+
+// checkBankHolder accepts a bank account only if the organizer already has a verified
+// mobile money account whose holder has the same name.
+// For local tests only, ALLOW_UNVERIFIED_MOBILE_MONEY=true accepts unverified mobile money accounts.
+func checkBankHolder(existing []models.PayoutAccount, bankHolder string) error {
+	allowUnverified := os.Getenv("ALLOW_UNVERIFIED_MOBILE_MONEY") == "true"
+	hasMobile := false
+	for _, acc := range existing {
+		if !isMobileMoney(acc.Type) {
+			continue
+		}
+		if acc.VerifiedAt == nil && !allowUnverified {
+			continue
+		}
+		hasMobile = true
+		if namesMatch(acc.AccountName, bankHolder) {
+			return nil
+		}
+	}
+	if !hasMobile {
+		return errors.New("add a verified mobile money account first")
+	}
+	return errors.New("the bank account holder name must match the name of your verified mobile money account")
 }
 
 // AddPayoutAccount adds a payout account for an organizer.
@@ -81,6 +160,16 @@ func (s *PayoutAccountService) AddPayoutAccount(ctx context.Context, input AddPa
 	}
 
 	now := time.Now()
+	var verifiedAt *time.Time
+
+	// A bank account is accepted only if it matches a verified mobile money account.
+	if input.Type == models.PayoutBank {
+		if err := checkBankHolder(existing, input.AccountName); err != nil {
+			return nil, err
+		}
+		verifiedAt = &now
+	}
+
 	account := models.PayoutAccount{
 		ID:            uuid.New().String(),
 		OrganizerID:   input.OrganizerID,
@@ -91,6 +180,7 @@ func (s *PayoutAccountService) AddPayoutAccount(ctx context.Context, input AddPa
 		BankCode:      input.BankCode,
 		Country:       country,
 		IsActive:      len(existing) == 0, // First account is active by default
+		VerifiedAt:    verifiedAt,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}

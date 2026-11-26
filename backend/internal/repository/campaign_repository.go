@@ -168,3 +168,8 @@ func (r *CampaignRepository) ListActiveCampaigns(ctx context.Context, max int) (
 	}
 	return out, nil
 }
+
+// TableName returns the table name (useful for transactions).
+func (r *CampaignRepository) TableName() string {
+	return r.tableName
+}

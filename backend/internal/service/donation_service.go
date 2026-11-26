@@ -37,17 +37,18 @@ func NewDonationService(
 }
 
 type CreateDonationInput struct {
-	CampaignID    string
-	DonorID       *string
-	DonorName     string
-	DonorPhone    string
-	DonorEmail    string
-	Amount        int64  // amount received by the organizer (excluding fee and tip)
-	TipAmount     int64  // optional tip for the platform
-	Comment       string // optional donor comment
-	DonorPhotoURL string // photo displayed with the donation (never for an anonymous donation)
-	PaymentMethod models.PaymentMethod
-	IsAnonymous   bool
+	CampaignID     string
+	DonorID        *string
+	DonorName      string
+	DonorPhone     string
+	DonorEmail     string
+	Amount         int64  // amount received by the organizer (excluding fee and tip)
+	TipAmount      int64  // optional tip for the platform
+	Comment        string // optional donor comment
+	DonorPhotoURL  string // photo displayed with the donation (never for an anonymous donation)
+	PaymentMethod  models.PaymentMethod
+	IsAnonymous    bool
+	IdempotencyKey string // unique key sent by the browser (anti-duplicate)
 }
 
 // CreateDonation records a pending donation with the organizer's active account.
@@ -92,10 +93,20 @@ func (s *DonationService) CreateDonation(ctx context.Context, input CreateDonati
 		donorPhoto = ""
 	}
 
+	// The donation ID comes from the idempotency key when there is one,
+	// so the same request sent twice can only create ONE donation.
+	donationID := uuid.New().String()
+	if input.IdempotencyKey != "" {
+		if _, err := uuid.Parse(input.IdempotencyKey); err != nil {
+			return nil, errors.New("invalid idempotency key")
+		}
+		donationID = input.IdempotencyKey
+	}
+
 	fee := ComputeFee(input.Amount)
 	now := time.Now()
 	donation := models.Donation{
-		ID:              uuid.New().String(),
+		ID:              donationID,
 		CampaignID:      campaign.ID,
 		PayoutAccountID: account.ID,
 		DonorID:         input.DonorID,
@@ -116,7 +127,20 @@ func (s *DonationService) CreateDonation(ctx context.Context, input CreateDonati
 		UpdatedAt:       now,
 	}
 
-	if err := s.donationRepo.CreateDonation(ctx, &donation); err != nil {
+	if err := s.donationRepo.CreateDonationOnce(ctx, &donation); err != nil {
+		if errors.Is(err, repository.ErrDonationExists) {
+			existing, getErr := s.donationRepo.GetDonationByID(ctx, donation.ID)
+			if getErr != nil {
+				return nil, fmt.Errorf("failed to load existing donation: %w", getErr)
+			}
+			if existing == nil ||
+				existing.CampaignID != donation.CampaignID ||
+				existing.Amount != donation.Amount ||
+				existing.PaymentMethod != donation.PaymentMethod {
+				return nil, errors.New("this request key was already used for a different donation")
+			}
+			return existing, nil // same request replayed: return the donation already created
+		}
 		return nil, fmt.Errorf("failed to save donation: %w", err)
 	}
 
@@ -124,7 +148,7 @@ func (s *DonationService) CreateDonation(ctx context.Context, input CreateDonati
 }
 
 // CompleteDonation is called when the aggregator confirms the donor's payment.
-// It can be called multiple times for the same donation (replayed webhook) without duplicate effects.
+// Safe to call many times, even at the same moment (replayed webhooks).
 func (s *DonationService) CompleteDonation(ctx context.Context, donationID string) error {
 	donation, err := s.donationRepo.GetDonationByID(ctx, donationID)
 	if err != nil {
@@ -137,21 +161,31 @@ func (s *DonationService) CompleteDonation(ctx context.Context, donationID strin
 		return fmt.Errorf("donation %s is %s, cannot complete it", donation.ID, donation.Status)
 	}
 
-	// 1. Count the donation (only once)
+	// 1. Count the donation exactly once (atomic transaction).
 	if donation.Status == models.DonationPending {
+		won, err := s.donationRepo.CompleteAndCount(
+			ctx, donation.ID, s.campaignRepo.TableName(), donation.CampaignID, donation.Amount)
+		if err != nil {
+			return fmt.Errorf("failed to complete donation: %w", err)
+		}
+		if !won {
+			// Another call just counted it and takes care of the payout.
+			return nil
+		}
 		donation.Status = models.DonationCompleted
 		donation.UpdatedAt = time.Now()
-		if err := s.donationRepo.CreateDonation(ctx, donation); err != nil {
-			return fmt.Errorf("failed to mark donation as completed: %w", err)
-		}
-		if err := s.campaignRepo.UpdateCampaignAmount(ctx, donation.CampaignID, donation.Amount); err != nil {
-			return fmt.Errorf("failed to update campaign amount: %w", err)
-		}
 		s.addToOrganizerTotal(ctx, donation)
 	}
 
-	// 2. Send the money to the organizer, only if it hasn't been sent already
+	// 2. Send the money exactly once.
 	if donation.PayoutRef == "" {
+		claimed, err := s.donationRepo.ClaimPayout(ctx, donation.ID)
+		if err != nil {
+			return fmt.Errorf("failed to reserve payout: %w", err)
+		}
+		if !claimed {
+			return nil // another call is already sending it
+		}
 		return s.sendPayout(ctx, donation)
 	}
 	return nil
@@ -198,7 +232,8 @@ func (s *DonationService) sendPayout(ctx context.Context, donation *models.Donat
 		Account:   *current,
 	})
 	if err != nil {
-		// Network error or timeout: the transfer might have gone through. Do not resend without checking its status.
+		// Network error or timeout: the transfer might have gone through.
+		// Do not resend without checking its status.
 		return fmt.Errorf("payout request failed, check its status before retrying: %w", err)
 	}
 

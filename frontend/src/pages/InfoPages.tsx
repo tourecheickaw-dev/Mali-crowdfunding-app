@@ -184,18 +184,18 @@ export function Privacy() {
 export function LegalNotice() {
   return (
     <Shell title="Mentions légales">
-      <Block title="Éditeur du site">
-        <p>Demso</p>
+     <Block title="Éditeur du site">
+        <p>Demso — entreprise individuelle</p>
+        <p>Activité : édition de logiciels (application en ligne).</p>
+        <p>Immatriculée au RCCM sous le numéro ML-BKO-01-2026-A-07849 (Bamako, Mali).</p>
+        <p>Siège : Moribabougou, Commune I, Bamako, Mali.</p>
+        <p>NIF : en cours d'attribution.</p>
         <p>
-          À COMPLÉTER quand la société sera créée : nom de la société, forme juridique, adresse, numéro
-          d'immatriculation.
-        </p>
-        <p>
-          Contact : <a className="font-semibold underline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
+          Contact : <a className="font-semibold underline" href="mailto:demso.support@gmail.com">demso.support@gmail.com</a>
         </p>
       </Block>
       <Block title="Directeur de la publication">
-        <p>À COMPLÉTER : nom du responsable.</p>
+        <p>Cheick Abdoul Wahab Touré</p>
       </Block>
       <Block title="Hébergement">
         <p>

@@ -30,15 +30,16 @@ func NewDonationHandler(donationService *service.DonationService, donorService *
 }
 
 type createDonationRequest struct {
-	CampaignID    string               `json:"campaign_id" binding:"required"`
-	Amount        int64                `json:"amount" binding:"required,gt=0,lte=1000000000"` // amount received by the organizer
-	TipAmount     int64                `json:"tip_amount" binding:"gte=0,lte=1000000000"`     // optional tip
-	PaymentMethod models.PaymentMethod `json:"payment_method" binding:"required"`
-	DonorName     string               `json:"donor_name" binding:"max=100"`
-	DonorPhone    string               `json:"donor_phone" binding:"omitempty,max=30"`
-	DonorEmail    string               `json:"donor_email" binding:"omitempty,email,max=254"`
-	Comment       string               `json:"comment" binding:"max=500"`
-	IsAnonymous   bool                 `json:"is_anonymous"`
+	CampaignID     string               `json:"campaign_id" binding:"required"`
+	Amount         int64                `json:"amount" binding:"required,gt=0,lte=1000000000"` // amount received by the organizer
+	TipAmount      int64                `json:"tip_amount" binding:"gte=0,lte=1000000000"`     // optional tip
+	PaymentMethod  models.PaymentMethod `json:"payment_method" binding:"required"`
+	DonorName      string               `json:"donor_name" binding:"max=100"`
+	DonorPhone     string               `json:"donor_phone" binding:"omitempty,max=30"`
+	DonorEmail     string               `json:"donor_email" binding:"omitempty,email,max=254"`
+	Comment        string               `json:"comment" binding:"max=500"`
+	IsAnonymous    bool                 `json:"is_anonymous"`
+	IdempotencyKey string               `json:"idempotency_key"`
 }
 
 // Create records a PENDING donation. It only becomes "completed" upon confirmation by
@@ -87,17 +88,18 @@ func (h *DonationHandler) Create(c *gin.Context) {
 	}
 
 	donation, err := h.donationService.CreateDonation(c.Request.Context(), service.CreateDonationInput{
-		CampaignID:    req.CampaignID,
-		DonorID:       donorID,
-		DonorName:     req.DonorName,
-		DonorPhone:    donorPhone,
-		DonorEmail:    req.DonorEmail,
-		Amount:        req.Amount,
-		TipAmount:     req.TipAmount,
-		Comment:       req.Comment,
-		DonorPhotoURL: donorPhoto,
-		PaymentMethod: req.PaymentMethod,
-		IsAnonymous:   req.IsAnonymous,
+		CampaignID:     req.CampaignID,
+		DonorID:        donorID,
+		DonorName:      req.DonorName,
+		DonorPhone:     donorPhone,
+		DonorEmail:     req.DonorEmail,
+		Amount:         req.Amount,
+		TipAmount:      req.TipAmount,
+		Comment:        req.Comment,
+		DonorPhotoURL:  donorPhoto,
+		PaymentMethod:  req.PaymentMethod,
+		IsAnonymous:    req.IsAnonymous,
+		IdempotencyKey: req.IdempotencyKey,
 	})
 	if err != nil {
 		respondServiceError(c, err, "unable to save donation")

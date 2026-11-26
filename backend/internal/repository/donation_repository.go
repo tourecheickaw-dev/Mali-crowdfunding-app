@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -253,4 +254,108 @@ func (r *DonationRepository) SetCommentHidden(ctx context.Context, id string, hi
 		return fmt.Errorf("failed to change comment visibility: %w", err)
 	}
 	return nil
+}
+
+// ErrDonationExists: a donation with this ID already exists.
+var ErrDonationExists = errors.New("donation already exists")
+
+// CreateDonationOnce inserts the donation only if it does not already exist.
+func (r *DonationRepository) CreateDonationOnce(ctx context.Context, donation *models.Donation) error {
+	item, err := marshalItem(donation)
+	if err != nil {
+		return fmt.Errorf("failed to marshal donation: %w", err)
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:                aws.String(r.tableName),
+		Item:                     item,
+		ConditionExpression:      aws.String("attribute_not_exists(#id)"),
+		ExpressionAttributeNames: map[string]string{"#id": "id"},
+	})
+	if err != nil {
+		var cfe *types.ConditionalCheckFailedException
+		if errors.As(err, &cfe) {
+			return ErrDonationExists
+		}
+		return fmt.Errorf("failed to save donation: %w", err)
+	}
+	return nil
+}
+
+// CompleteAndCount transitions the donation from "pending" to "completed" AND adds its amount
+// to the campaign in a SINGLE transaction: all or nothing.
+// Returns false if the donation was no longer "pending" (already counted by another call).
+func (r *DonationRepository) CompleteAndCount(ctx context.Context, donationID, campaignTable, campaignID string, amount int64) (bool, error) {
+	now := time.Now().Format(time.RFC3339)
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Update: &types.Update{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"id": &types.AttributeValueMemberS{Value: donationID},
+					},
+					UpdateExpression:         aws.String("SET #s = :done, updated_at = :now"),
+					ConditionExpression:      aws.String("#s = :pending"),
+					ExpressionAttributeNames: map[string]string{"#s": "status"},
+					ExpressionAttributeValues: map[string]types.AttributeValue{
+						":done":    &types.AttributeValueMemberS{Value: string(models.DonationCompleted)},
+						":pending": &types.AttributeValueMemberS{Value: string(models.DonationPending)},
+						":now":     &types.AttributeValueMemberS{Value: now},
+					},
+				},
+			},
+			{
+				Update: &types.Update{
+					TableName: aws.String(campaignTable),
+					Key: map[string]types.AttributeValue{
+						"id": &types.AttributeValueMemberS{Value: campaignID},
+					},
+					UpdateExpression:         aws.String("ADD current_amount :amt"),
+					ConditionExpression:      aws.String("attribute_exists(#id)"),
+					ExpressionAttributeNames: map[string]string{"#id": "id"},
+					ExpressionAttributeValues: map[string]types.AttributeValue{
+						":amt": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", amount)},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) && len(tce.CancellationReasons) > 0 {
+			c := tce.CancellationReasons[0].Code
+			if c != nil && *c == "ConditionalCheckFailed" {
+				return false, nil // the donation was no longer "pending"
+			}
+		}
+		return false, fmt.Errorf("failed to complete donation: %w", err)
+	}
+	return true, nil
+}
+
+// ClaimPayout reserves sending the funds for 2 minutes:
+// only one call at a time can pay the organizer.
+func (r *DonationRepository) ClaimPayout(ctx context.Context, id string) (bool, error) {
+	now := time.Now().Unix()
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+		UpdateExpression:         aws.String("SET payout_lock_until = :until"),
+		ConditionExpression:      aws.String("attribute_exists(#id) AND (attribute_not_exists(payout_lock_until) OR payout_lock_until < :now)"),
+		ExpressionAttributeNames: map[string]string{"#id": "id"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":until": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now+120)},
+			":now":   &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", now)},
+		},
+	})
+	if err != nil {
+		var cfe *types.ConditionalCheckFailedException
+		if errors.As(err, &cfe) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim payout: %w", err)
+	}
+	return true, nil
 }

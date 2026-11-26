@@ -8,6 +8,26 @@ import type { CampaignDetail, DonationCreated } from '../types'
 const QUICK = [2000, 5000, 10000, 25000]
 const PHONE_RE = /^\+\d{8,15}$/
 
+function PayLogo({ src, label }: { src: string; label: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed || !src) return <span className="text-sm font-semibold">{label}</span>
+  return (
+    <img
+      src={src}
+      alt={label}
+      onError={() => setFailed(true)}
+      className="h-10 w-auto max-w-[80%] object-contain"
+    />
+  )
+}
+
+function newKey(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) =>
+    (Number(c) ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (Number(c) / 4)))).toString(16),
+  )
+}
+
 export default function DonatePage() {
   const { slug } = useParams<{ slug: string }>()
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null)
@@ -21,6 +41,7 @@ export default function DonatePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<DonationCreated | null>(null)
+    const [idemKey, setIdemKey] = useState(newKey)
 
   useEffect(() => {
     api<CampaignDetail>(`/campaigns/${slug}`)
@@ -34,6 +55,11 @@ export default function DonatePage() {
   const selected = PAY_METHODS.find((m) => m.value === method)
   const overLimit = !!selected && selected.max > 0 && total > selected.max
   const cleanPhone = phone.replace(/[\s.-]/g, '')
+
+  // New key if the donor changes the amount or payment method
+  useEffect(() => {
+    setIdemKey(newKey())
+  }, [amountNum, method])
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -59,6 +85,7 @@ export default function DonatePage() {
           donor_email: email,
           comment,
           is_anonymous: anonymous,
+                    idempotency_key: idemKey,
         }),
       })
       setResult(d)
@@ -131,24 +158,19 @@ export default function DonatePage() {
       <section>
         <p className="mb-2 text-lg font-semibold">Payer avec</p>
         <div className="grid grid-cols-2 gap-3">
-          {PAY_METHODS.map((m) => (
-            <button
-              type="button"
-              key={m.value}
-              onClick={() => setMethod(m.value)}
-              className={`flex h-20 flex-col items-center justify-center gap-1 rounded-2xl border-2 bg-white ${
-                method === m.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'
-              }`}
-            >
-              <img
-                src={m.logo}
-                alt=""
-                className="h-8 w-auto object-contain"
-                onError={(e) => (e.currentTarget.style.display = 'none')}
-              />
-              <span className="text-sm font-medium">{m.label}</span>
-            </button>
-          ))}
+         {PAY_METHODS.map((m) => (
+  <button
+    type="button"
+    key={m.value}
+    onClick={() => setMethod(m.value)}
+    aria-label={m.label}
+    className={`flex h-20 items-center justify-center rounded-2xl border-2 bg-white ${
+      method === m.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-gray-200'
+    }`}
+  >
+    <PayLogo src={m.logo} label={m.label} />
+  </button>
+))}
         </div>
         {overLimit && selected && (
           <p className="mt-2 text-red-600">
